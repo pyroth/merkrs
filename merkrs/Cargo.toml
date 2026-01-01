@@ -1,6 +1,6 @@
 [package]
 name = "merkrs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Merkle tree library for Rust, compatible with OpenZeppelin's JavaScript implementation"
 license = "MIT"

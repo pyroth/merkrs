@@ -214,10 +214,13 @@ pub fn process_multi_proof(multiproof: &MultiProof, node_hash: NodeHashFn) -> Re
         .collect::<Result<Vec<_>>>()?;
 
     for &flag in &multiproof.proof_flags {
+        invariant(!stack.is_empty(), "Multiproof stack underflow")?;
         let a = stack.remove(0);
         let b = if flag {
+            invariant(!stack.is_empty(), "Multiproof stack underflow")?;
             stack.remove(0)
         } else {
+            invariant(!proof.is_empty(), "Multiproof proof underflow")?;
             proof.remove(0)
         };
         stack.push(node_hash(&a, &b));
@@ -317,10 +320,17 @@ pub fn render_merkle_tree(tree: &[HexString]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MerkleTreeError;
     use crate::hashes::keccak256;
+
+    const ZERO: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     fn make_test_leaves(count: usize) -> Vec<Bytes32> {
         (0..count).map(|i| keccak256(&[i as u8])).collect()
+    }
+
+    fn zero_bytes32() -> Bytes32 {
+        [0u8; 32]
     }
 
     #[test]
@@ -329,6 +339,55 @@ mod tests {
         let tree = make_merkle_tree_default(&leaves).unwrap();
         assert_eq!(tree.len(), 7);
         assert!(is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
+    fn test_single_leaf_tree() {
+        let leaves = make_test_leaves(1);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert!(is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
+    fn test_two_leaf_tree() {
+        let leaves = make_test_leaves(2);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+        assert_eq!(tree.len(), 3);
+        assert!(is_valid_merkle_tree_default(&tree));
+
+        for i in 1..3 {
+            let proof = get_proof(&tree, i).unwrap();
+            let root = process_proof_default(&tree[i], &proof).unwrap();
+            assert_eq!(root, tree[0]);
+        }
+    }
+
+    #[test]
+    fn test_power_of_two_leaves() {
+        for &count in &[2, 4, 8, 16] {
+            let leaves = make_test_leaves(count);
+            let tree = make_merkle_tree_default(&leaves).unwrap();
+            assert_eq!(tree.len(), 2 * count - 1);
+            assert!(is_valid_merkle_tree_default(&tree));
+        }
+    }
+
+    #[test]
+    fn test_non_power_of_two_leaves() {
+        for &count in &[3, 5, 7, 9, 15] {
+            let leaves = make_test_leaves(count);
+            let tree = make_merkle_tree_default(&leaves).unwrap();
+            assert_eq!(tree.len(), 2 * count - 1);
+            assert!(is_valid_merkle_tree_default(&tree));
+        }
+    }
+
+    #[test]
+    fn test_zero_leaves_error() {
+        let leaves: Vec<Bytes32> = vec![];
+        let result = make_merkle_tree_default(&leaves);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
     }
 
     #[test]
@@ -345,6 +404,19 @@ mod tests {
     }
 
     #[test]
+    fn test_proof_for_all_leaves() {
+        let leaves = make_test_leaves(8);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let first_leaf_idx = tree.len() - leaves.len();
+        for i in first_leaf_idx..tree.len() {
+            let proof = get_proof(&tree, i).unwrap();
+            let root = process_proof_default(&tree[i], &proof).unwrap();
+            assert_eq!(root, tree[0], "Proof failed for leaf at index {}", i);
+        }
+    }
+
+    #[test]
     fn test_multi_proof() {
         let leaves = make_test_leaves(4);
         let tree = make_merkle_tree_default(&leaves).unwrap();
@@ -356,6 +428,81 @@ mod tests {
     }
 
     #[test]
+    fn test_multiproof_subset() {
+        let leaves = make_test_leaves(8);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let indices = vec![tree.len() - 1, tree.len() - 3, tree.len() - 5];
+        let multiproof = get_multi_proof(&tree, &indices).unwrap();
+        let root = process_multi_proof_default(&multiproof).unwrap();
+        assert_eq!(root, tree[0]);
+    }
+
+    #[test]
+    fn test_multiproof_all_leaves() {
+        let leaves = make_test_leaves(4);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let indices: Vec<usize> = (tree.len() - leaves.len()..tree.len()).collect();
+        let multiproof = get_multi_proof(&tree, &indices).unwrap();
+        let root = process_multi_proof_default(&multiproof).unwrap();
+        assert_eq!(root, tree[0]);
+    }
+
+    #[test]
+    fn test_multiproof_empty_indices() {
+        let leaves = make_test_leaves(4);
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let multiproof = get_multi_proof(&tree, &[]).unwrap();
+        assert!(multiproof.leaves.is_empty());
+        assert_eq!(multiproof.proof.len(), 1);
+        assert_eq!(multiproof.proof[0], tree[0]);
+    }
+
+    #[test]
+    fn test_multiproof_duplicate_index_error() {
+        let leaves = vec![zero_bytes32(), zero_bytes32()];
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let result = get_multi_proof(&tree, &[1, 1]);
+        assert!(matches!(result, Err(MerkleTreeError::DuplicatedIndex)));
+    }
+
+    #[test]
+    fn test_proof_for_internal_node_error() {
+        let leaves = vec![zero_bytes32(), zero_bytes32()];
+        let tree = make_merkle_tree_default(&leaves).unwrap();
+
+        let result = get_proof(&tree, 0);
+        assert!(matches!(result, Err(MerkleTreeError::NotALeaf)));
+    }
+
+    #[test]
+    fn test_tree_validity_empty() {
+        let tree: Vec<String> = vec![];
+        assert!(!is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
+    fn test_tree_validity_invalid_node() {
+        let tree = vec!["0x00".to_string()];
+        assert!(!is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
+    fn test_tree_validity_even_nodes() {
+        let tree = vec![ZERO.to_string(), ZERO.to_string()];
+        assert!(!is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
+    fn test_tree_validity_wrong_hash() {
+        let tree = vec![ZERO.to_string(), ZERO.to_string(), ZERO.to_string()];
+        assert!(!is_valid_merkle_tree_default(&tree));
+    }
+
+    #[test]
     fn test_render_tree() {
         let leaves = make_test_leaves(2);
         let tree = make_merkle_tree_default(&leaves).unwrap();
@@ -363,5 +510,62 @@ mod tests {
         assert!(rendered.contains("0)"));
         assert!(rendered.contains("1)"));
         assert!(rendered.contains("2)"));
+        assert!(rendered.contains("0x"));
+    }
+
+    #[test]
+    fn test_render_tree_empty_error() {
+        let tree: Vec<String> = vec![];
+        let result = render_merkle_tree(&tree);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn test_multiproof_bad_format() {
+        let bad_multiproof = MultiProof {
+            leaves: vec![ZERO.to_string(), ZERO.to_string()],
+            proof: vec![ZERO.to_string(), ZERO.to_string()],
+            proof_flags: vec![true, true, false],
+        };
+        let result = process_multi_proof_default(&bad_multiproof);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multiproof_serialize() {
+        let multiproof = MultiProof {
+            leaves: vec![ZERO.to_string()],
+            proof: vec![ZERO.to_string()],
+            proof_flags: vec![true, false],
+        };
+
+        let json = serde_json::to_string(&multiproof).unwrap();
+        assert!(json.contains("leaves"));
+        assert!(json.contains("proof"));
+        assert!(json.contains("proofFlags"));
+    }
+
+    #[test]
+    fn test_multiproof_deserialize() {
+        let json = r#"{"leaves":["0x0000000000000000000000000000000000000000000000000000000000000000"],"proof":[],"proofFlags":[true]}"#;
+        let multiproof: MultiProof = serde_json::from_str(json).unwrap();
+
+        assert_eq!(multiproof.leaves.len(), 1);
+        assert_eq!(multiproof.proof.len(), 0);
+        assert_eq!(multiproof.proof_flags.len(), 1);
+    }
+
+    #[test]
+    fn test_multiproof_roundtrip() {
+        let original = MultiProof {
+            leaves: vec![ZERO.to_string(), ZERO.to_string()],
+            proof: vec![ZERO.to_string()],
+            proof_flags: vec![true, false, true],
+        };
+
+        let json = serde_json::to_string(&original).unwrap();
+        let recovered: MultiProof = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(original, recovered);
     }
 }

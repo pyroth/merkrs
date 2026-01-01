@@ -98,14 +98,35 @@ pub fn concat_sorted(a: &Bytes32, b: &Bytes32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MerkleTreeError;
 
     #[test]
     fn test_hex_roundtrip() {
-        let bytes = [0xab; 32];
-        let hex = bytes32_to_hex(&bytes);
+        let original = [0xab; 32];
+        let hex = bytes32_to_hex(&original);
         assert!(hex.starts_with("0x"));
-        let decoded = hex_to_bytes32(&hex).unwrap();
-        assert_eq!(bytes, decoded);
+        let recovered = hex_to_bytes32(&hex).unwrap();
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn test_hex_without_prefix() {
+        let hex = "0000000000000000000000000000000000000000000000000000000000000001";
+        let bytes = hex_to_bytes32(hex).unwrap();
+        assert_eq!(bytes[31], 1);
+    }
+
+    #[test]
+    fn test_hex_with_prefix() {
+        let hex = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        let bytes = hex_to_bytes32(hex).unwrap();
+        assert_eq!(bytes[31], 1);
+    }
+
+    #[test]
+    fn test_invalid_hex_length() {
+        let result = hex_to_bytes32("0x00");
+        assert!(matches!(result, Err(MerkleTreeError::InvalidNodeLength)));
     }
 
     #[test]
@@ -113,8 +134,40 @@ mod tests {
         let a = [0u8; 32];
         let mut b = [0u8; 32];
         b[31] = 1;
+
         assert_eq!(compare_bytes32(&a, &b), Ordering::Less);
         assert_eq!(compare_bytes32(&b, &a), Ordering::Greater);
         assert_eq!(compare_bytes32(&a, &a), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_compare_bytes32_first_byte() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        a[0] = 1;
+        b[0] = 2;
+
+        assert_eq!(compare_bytes32(&a, &b), Ordering::Less);
+    }
+
+    #[test]
+    fn test_to_bytes32_from_slice() {
+        let slice: &[u8] = &[1u8; 32];
+        let bytes = slice.to_bytes32().unwrap();
+        assert_eq!(bytes, [1u8; 32]);
+    }
+
+    #[test]
+    fn test_to_bytes32_from_vec() {
+        let vec = vec![2u8; 32];
+        let bytes = vec.to_bytes32().unwrap();
+        assert_eq!(bytes, [2u8; 32]);
+    }
+
+    #[test]
+    fn test_to_bytes32_wrong_length() {
+        let slice: &[u8] = &[1u8; 31];
+        let result = slice.to_bytes32();
+        assert!(matches!(result, Err(MerkleTreeError::InvalidNodeLength)));
     }
 }

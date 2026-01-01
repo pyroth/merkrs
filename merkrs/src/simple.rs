@@ -305,6 +305,9 @@ impl SimpleMerkleTree {
 mod tests {
     use super::*;
     use crate::bytes::hex_to_bytes32;
+    use crate::error::MerkleTreeError;
+
+    const ZERO: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
     fn make_test_values(count: usize) -> Vec<Bytes32> {
         (0..count)
@@ -323,6 +326,16 @@ mod tests {
 
         assert_eq!(tree.len(), 4);
         assert!(!tree.root().is_empty());
+        tree.validate().unwrap();
+    }
+
+    #[test]
+    fn test_simple_tree_single_leaf() {
+        let values = make_test_values(1);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        assert_eq!(tree.len(), 1);
+        tree.validate().unwrap();
     }
 
     #[test]
@@ -338,43 +351,46 @@ mod tests {
     }
 
     #[test]
+    fn test_proof_all_leaves() {
+        let values = make_test_values(8);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        for (i, value) in values.iter().enumerate() {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+            assert!(tree.verify_proof_by_index(i, &proof).unwrap());
+        }
+    }
+
+    #[test]
     fn test_static_verify() {
         let values = make_test_values(4);
         let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
 
-        let proof = tree.get_proof(&values[0]).unwrap();
-        let result = SimpleMerkleTree::verify(tree.root(), &values[0], &proof, None).unwrap();
-        assert!(result);
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            let verified = SimpleMerkleTree::verify(tree.root(), value, &proof, None).unwrap();
+            assert!(verified);
+        }
     }
 
     #[test]
-    fn test_dump_and_load() {
-        let values = make_test_values(4);
-        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+    fn test_reject_invalid_proof() {
+        let values1 = make_test_values(4);
+        let tree1 = SimpleMerkleTree::of(&values1, SimpleMerkleTreeOptions::default()).unwrap();
 
-        let data = tree.dump();
-        let json_str = serde_json::to_string(&data).unwrap();
-        let loaded_data: SimpleMerkleTreeData = serde_json::from_str(&json_str).unwrap();
-        let loaded_tree = SimpleMerkleTree::load(loaded_data, None).unwrap();
+        let values2 = make_test_values(4)
+            .into_iter()
+            .map(|mut v| {
+                v[0] = 0xff;
+                v
+            })
+            .collect::<Vec<_>>();
+        let tree2 = SimpleMerkleTree::of(&values2, SimpleMerkleTreeOptions::default()).unwrap();
 
-        assert_eq!(tree.root(), loaded_tree.root());
-        assert_eq!(tree.len(), loaded_tree.len());
-    }
-
-    #[test]
-    fn test_hex_values() {
-        let values: Vec<Bytes32> = vec![
-            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000001")
-                .unwrap(),
-            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000002")
-                .unwrap(),
-        ];
-
-        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
-        assert_eq!(tree.len(), 2);
-
-        let proof = tree.get_proof(&values[0]).unwrap();
-        assert!(tree.verify_proof(&values[0], &proof).unwrap());
+        let proof = tree1.get_proof(&values1[0]).unwrap();
+        let verified = tree2.verify_proof(&values1[0], &proof).unwrap();
+        assert!(!verified);
     }
 
     #[test]
@@ -387,5 +403,148 @@ mod tests {
 
         let result = SimpleMerkleTree::verify_multi_proof(tree.root(), &multiproof, None).unwrap();
         assert!(result);
+    }
+
+    #[test]
+    fn test_multiproof_larger() {
+        let values = make_test_values(8);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        let indices = vec![0, 2, 5];
+        let multiproof = tree.get_multi_proof_by_indices(&indices).unwrap();
+
+        let verified =
+            SimpleMerkleTree::verify_multi_proof(tree.root(), &multiproof, None).unwrap();
+        assert!(verified);
+    }
+
+    #[test]
+    fn test_dump_and_load() {
+        let values = make_test_values(4);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        let data = tree.dump();
+        assert_eq!(data.format, "simple-v1");
+        assert!(data.hash.is_none());
+
+        let json_str = serde_json::to_string(&data).unwrap();
+        let loaded_data: SimpleMerkleTreeData = serde_json::from_str(&json_str).unwrap();
+        let loaded_tree = SimpleMerkleTree::load(loaded_data, None).unwrap();
+
+        assert_eq!(tree.root(), loaded_tree.root());
+        assert_eq!(tree.len(), loaded_tree.len());
+        assert_eq!(tree.render().unwrap(), loaded_tree.render().unwrap());
+    }
+
+    #[test]
+    fn test_entries() {
+        let values = make_test_values(4);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        for (index, value) in tree.entries() {
+            assert_eq!(value, tree.at(index).unwrap());
+        }
+        assert!(tree.at(tree.len()).is_none());
+    }
+
+    #[test]
+    fn test_unsorted_leaves() {
+        let values = make_test_values(4);
+        let options = SimpleMerkleTreeOptions {
+            sort_leaves: false,
+            node_hash: None,
+        };
+        let tree = SimpleMerkleTree::of(&values, options).unwrap();
+        tree.validate().unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_hex_values() {
+        let values: Vec<Bytes32> = vec![
+            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000001")
+                .unwrap(),
+            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000002")
+                .unwrap(),
+            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000003")
+                .unwrap(),
+            hex_to_bytes32("0x0000000000000000000000000000000000000000000000000000000000000004")
+                .unwrap(),
+        ];
+
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_reject_unknown_format() {
+        let data = SimpleMerkleTreeData {
+            format: "nonstandard".to_string(),
+            tree: vec![],
+            values: vec![],
+            hash: None,
+        };
+        let result = SimpleMerkleTree::load(data, None);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn test_reject_wrong_format() {
+        let data = SimpleMerkleTreeData {
+            format: "standard-v1".to_string(),
+            tree: vec![],
+            values: vec![],
+            hash: None,
+        };
+        let result = SimpleMerkleTree::load(data, None);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn test_reject_malformed_dump() {
+        let data = SimpleMerkleTreeData {
+            format: "simple-v1".to_string(),
+            tree: vec![ZERO.to_string()],
+            values: vec![SimpleValueEntry {
+                value: "0x0000000000000000000000000000000000000000000000000000000000000001"
+                    .to_string(),
+                tree_index: 0,
+            }],
+            hash: None,
+        };
+        let result = SimpleMerkleTree::load(data, None);
+        assert!(matches!(result, Err(MerkleTreeError::Invariant(_))));
+    }
+
+    #[test]
+    fn test_reject_invalid_tree_structure() {
+        let data = SimpleMerkleTreeData {
+            format: "simple-v1".to_string(),
+            tree: vec![ZERO.to_string(), ZERO.to_string(), ZERO.to_string()],
+            values: vec![SimpleValueEntry {
+                value: ZERO.to_string(),
+                tree_index: 2,
+            }],
+            hash: None,
+        };
+        let result = SimpleMerkleTree::load(data, None);
+        assert!(matches!(result, Err(MerkleTreeError::Invariant(_))));
+    }
+
+    #[test]
+    fn test_out_of_bounds() {
+        let values = make_test_values(4);
+        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+
+        let result = tree.get_proof_by_index(100);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
     }
 }

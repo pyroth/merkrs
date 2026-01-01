@@ -38,7 +38,7 @@ mod tests {
     use crate::bytes::bytes32_to_hex;
 
     #[test]
-    fn test_keccak256() {
+    fn test_keccak256_known_value() {
         let input = b"hello";
         let hash = keccak256(input);
         let hex = bytes32_to_hex(&hash);
@@ -49,11 +49,43 @@ mod tests {
     }
 
     #[test]
+    fn test_keccak256_empty() {
+        let input = b"";
+        let hash = keccak256(input);
+        let hex = bytes32_to_hex(&hash);
+        assert_eq!(
+            hex,
+            "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+        );
+    }
+
+    #[test]
     fn test_standard_node_hash_commutative() {
         let a = [1u8; 32];
         let b = [2u8; 32];
+
         let hash1 = standard_node_hash(&a, &b).unwrap();
         let hash2 = standard_node_hash(&b, &a).unwrap();
+
         assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_default_node_hash_commutative() {
+        let a = [1u8; 32];
+        let b = [2u8; 32];
+
+        let hash1 = default_node_hash(&a, &b);
+        let hash2 = default_node_hash(&b, &a);
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_standard_leaf_hash_double_hash() {
+        let input = [0u8; 32];
+        let leaf_hash = standard_leaf_hash(&input);
+        let expected = keccak256(&keccak256(&input));
+        assert_eq!(leaf_hash, expected);
     }
 }

@@ -443,21 +443,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MerkleTreeError;
     use serde_json::json;
+
+    fn make_airdrop_data(count: usize) -> Vec<Vec<serde_json::Value>> {
+        (0..count)
+            .map(|i| vec![json!(format!("0x{:040x}", i + 1)), json!((i + 1) * 100)])
+            .collect()
+    }
 
     #[test]
     fn test_standard_merkle_tree_basic() {
-        let values = vec![
-            vec![
-                json!("0x1111111111111111111111111111111111111111"),
-                json!(100u64),
-            ],
-            vec![
-                json!("0x2222222222222222222222222222222222222222"),
-                json!(200u64),
-            ],
-        ];
-
+        let values = make_airdrop_data(4);
         let tree = StandardMerkleTree::of(
             values.clone(),
             vec!["address".to_string(), "uint256".to_string()],
@@ -465,31 +462,28 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(tree.len(), 2);
+        assert_eq!(tree.len(), 4);
         assert!(!tree.root().is_empty());
+        tree.validate().unwrap();
+    }
+
+    #[test]
+    fn test_single_leaf() {
+        let values = make_airdrop_data(1);
+        let tree = StandardMerkleTree::of(
+            values,
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(tree.len(), 1);
+        tree.validate().unwrap();
     }
 
     #[test]
     fn test_proof_verification() {
-        let values = vec![
-            vec![
-                json!("0x1111111111111111111111111111111111111111"),
-                json!(100u64),
-            ],
-            vec![
-                json!("0x2222222222222222222222222222222222222222"),
-                json!(200u64),
-            ],
-            vec![
-                json!("0x3333333333333333333333333333333333333333"),
-                json!(300u64),
-            ],
-            vec![
-                json!("0x4444444444444444444444444444444444444444"),
-                json!(400u64),
-            ],
-        ];
-
+        let values = make_airdrop_data(8);
         let tree = StandardMerkleTree::of(
             values.clone(),
             vec!["address".to_string(), "uint256".to_string()],
@@ -505,7 +499,132 @@ mod tests {
     }
 
     #[test]
+    fn test_static_verify() {
+        let values = make_airdrop_data(4);
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            let verified = StandardMerkleTree::verify(
+                tree.root(),
+                &["address".to_string(), "uint256".to_string()],
+                value,
+                &proof,
+            )
+            .unwrap();
+            assert!(verified);
+        }
+    }
+
+    #[test]
+    fn test_reject_invalid_proof() {
+        let values1 = make_airdrop_data(4);
+        let tree1 = StandardMerkleTree::of(
+            values1.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        let values2 = make_airdrop_data(4)
+            .into_iter()
+            .map(|mut v| {
+                v[1] = json!(9999);
+                v
+            })
+            .collect();
+        let tree2 = StandardMerkleTree::of(
+            values2,
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        let proof = tree1.get_proof(&values1[0]).unwrap();
+        let verified = tree2.verify_proof(&values1[0], &proof).unwrap();
+        assert!(!verified);
+    }
+
+    #[test]
+    fn test_multiproof() {
+        let values = make_airdrop_data(8);
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        let indices = vec![0, 2, 5];
+        let multiproof = tree.get_multi_proof_by_indices(&indices).unwrap();
+
+        assert_eq!(multiproof.leaves.len(), indices.len());
+    }
+
+    #[test]
     fn test_dump_and_load() {
+        let values = make_airdrop_data(4);
+        let tree = StandardMerkleTree::of(
+            values,
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        let data = tree.dump();
+        assert_eq!(data.format, "standard-v1");
+        assert_eq!(data.leaf_encoding, vec!["address", "uint256"]);
+
+        let json_str = serde_json::to_string(&data).unwrap();
+        let loaded_data: StandardMerkleTreeData = serde_json::from_str(&json_str).unwrap();
+        let loaded_tree = StandardMerkleTree::load(loaded_data).unwrap();
+
+        assert_eq!(tree.root(), loaded_tree.root());
+        assert_eq!(tree.len(), loaded_tree.len());
+        assert_eq!(tree.render().unwrap(), loaded_tree.render().unwrap());
+    }
+
+    #[test]
+    fn test_entries() {
+        let values = make_airdrop_data(4);
+        let tree = StandardMerkleTree::of(
+            values,
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        for (index, value) in tree.entries() {
+            assert_eq!(value, tree.at(index).unwrap());
+        }
+        assert!(tree.at(tree.len()).is_none());
+    }
+
+    #[test]
+    fn test_unsorted_leaves() {
+        let values = make_airdrop_data(4);
+        let options = MerkleTreeOptions::default().with_sort_leaves(false);
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            options,
+        )
+        .unwrap();
+        tree.validate().unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_various_types() {
         let values = vec![
             vec![
                 json!("0x1111111111111111111111111111111111111111"),
@@ -518,18 +637,140 @@ mod tests {
         ];
 
         let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_bytes32_type() {
+        let values = vec![
+            vec![
+                json!("0x1111111111111111111111111111111111111111111111111111111111111111"),
+                json!(100u64),
+            ],
+            vec![
+                json!("0x2222222222222222222222222222222222222222222222222222222222222222"),
+                json!(200u64),
+            ],
+        ];
+
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["bytes32".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_uint_types() {
+        let values = vec![
+            vec![json!(100u64), json!(200u64), json!(50u64)],
+            vec![json!(300u64), json!(400u64), json!(60u64)],
+        ];
+
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec![
+                "uint256".to_string(),
+                "uint128".to_string(),
+                "uint64".to_string(),
+            ],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        for value in &values {
+            let proof = tree.get_proof(value).unwrap();
+            assert!(tree.verify_proof(value, &proof).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_reject_unknown_format() {
+        let data = StandardMerkleTreeData {
+            format: "nonstandard".to_string(),
+            leaf_encoding: vec!["uint256".to_string()],
+            tree: vec![],
+            values: vec![],
+        };
+        let result = StandardMerkleTree::load(data);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn test_reject_wrong_format() {
+        let data = StandardMerkleTreeData {
+            format: "simple-v1".to_string(),
+            leaf_encoding: vec!["uint256".to_string()],
+            tree: vec![],
+            values: vec![],
+        };
+        let result = StandardMerkleTree::load(data);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn test_out_of_bounds() {
+        let values = make_airdrop_data(4);
+        let tree = StandardMerkleTree::of(
             values,
             vec!["address".to_string(), "uint256".to_string()],
             MerkleTreeOptions::default(),
         )
         .unwrap();
 
-        let data = tree.dump();
-        let json_str = serde_json::to_string(&data).unwrap();
-        let loaded_data: StandardMerkleTreeData = serde_json::from_str(&json_str).unwrap();
-        let loaded_tree = StandardMerkleTree::load(loaded_data).unwrap();
+        let result = tree.get_proof_by_index(100);
+        assert!(matches!(result, Err(MerkleTreeError::InvalidArgument(_))));
+    }
 
-        assert_eq!(tree.root(), loaded_tree.root());
-        assert_eq!(tree.len(), loaded_tree.len());
+    #[test]
+    fn test_leaf_not_in_tree() {
+        let values = make_airdrop_data(4);
+        let tree = StandardMerkleTree::of(
+            values,
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        let non_existent = vec![
+            json!("0x9999999999999999999999999999999999999999"),
+            json!(9999),
+        ];
+        let result = tree.get_proof(&non_existent);
+        assert!(matches!(result, Err(MerkleTreeError::LeafNotInTree)));
+    }
+
+    #[test]
+    fn test_large_tree() {
+        let values = make_airdrop_data(100);
+        let tree = StandardMerkleTree::of(
+            values.clone(),
+            vec!["address".to_string(), "uint256".to_string()],
+            MerkleTreeOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(tree.len(), 100);
+        tree.validate().unwrap();
+
+        for i in [0, 25, 50, 75, 99] {
+            let proof = tree.get_proof(&values[i]).unwrap();
+            assert!(tree.verify_proof(&values[i], &proof).unwrap());
+        }
     }
 }
