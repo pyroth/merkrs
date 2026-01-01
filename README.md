@@ -1,6 +1,6 @@
 # merkrs
 
-Rust implementation of Merkle tree library, compatible with OpenZeppelin's JavaScript implementation.
+Rust implementation of Merkle tree library, compatible with [OpenZeppelin's JavaScript](https://github.com/OpenZeppelin/merkle-tree.git) implementation.
 
 ## Features
 
