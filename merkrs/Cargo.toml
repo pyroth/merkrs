@@ -2,5 +2,17 @@
 name = "merkrs"
 version = "0.1.0"
 edition = "2024"
+description = "Merkle tree library for Rust, compatible with OpenZeppelin's JavaScript implementation"
+license = "MIT"
 
 [dependencies]
+alloy-primitives = {workspace = true}
+alloy-sol-types = {workspace = true}
+hex = {workspace = true}
+serde =  {workspace = true}
+serde_json = {workspace = true}
+sha3 = {workspace = true}
+thiserror = {workspace = true}
+
+[dev-dependencies]
+pretty_assertions = "1.4"
