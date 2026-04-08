@@ -1,11 +1,13 @@
 [package]
 name = "merkrs"
-version = "0.1.1"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Merkle tree library for Rust, compatible with OpenZeppelin's JavaScript implementation"
-license = "MIT"
 
 [dependencies]
+ahash = {workspace = true}
 alloy-primitives = {workspace = true}
 alloy-sol-types = {workspace = true}
 hex = {workspace = true}
@@ -16,3 +18,6 @@ thiserror = {workspace = true}
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+
+[lints]
+workspace = true

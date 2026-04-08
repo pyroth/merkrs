@@ -1,148 +1,47 @@
 //! # merkrs
 //!
-//! A Rust implementation of Merkle tree library, compatible with OpenZeppelin's JavaScript implementation.
+//! A Rust Merkle tree library compatible with
+//! [OpenZeppelin's JavaScript implementation](https://docs.openzeppelin.com/contracts/4.x/api/utils#MerkleProof).
 //!
 //! ## Features
 //!
-//! - **`StandardMerkleTree`**: For structured data with ABI encoding (Solidity compatible)
-//! - **`SimpleMerkleTree`**: For simple bytes32 values
-//! - Full proof generation and verification
-//! - Multi-proof support
-//! - Serialization/deserialization with serde
-//! - Keccak256 hashing (Ethereum compatible)
+//! - **[`StandardMerkleTree`]** — ABI-encoded Solidity values with double leaf hashing
+//! - **[`SimpleMerkleTree`]** — raw `[u8; 32]` values with single leaf hashing
+//! - Single-leaf and multi-proof generation / verification
+//! - Serialisation compatible with the OZ JavaScript `standard-v1` / `simple-v1` formats
+//! - Keccak-256 hashing (Ethereum compatible)
 //!
-//! ## Example
+//! ## Quick start
 //!
 //! ```rust
-//! use merkrs::{SimpleMerkleTree, SimpleMerkleTreeOptions, Bytes32};
+//! use merkrs::{SimpleMerkleTree, simple::Options, Bytes32};
 //!
 //! let values: Vec<Bytes32> = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32]];
-//! let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+//! let tree = SimpleMerkleTree::of(&values, Options::default()).unwrap();
 //!
 //! let proof = tree.get_proof(&values[0]).unwrap();
-//! assert!(tree.verify_proof(&values[0], &proof).unwrap());
+//! assert!(tree.verify_proof(&values[0], &proof));
 //! ```
 
-#![deny(unsafe_code)]
-#![allow(clippy::module_name_repetitions)]
-
+/// 32-byte hash values and hex-string conversion utilities.
 pub mod bytes;
-pub mod core;
+/// Error types and the crate-level `Result` alias.
 pub mod error;
+/// Keccak-256 hashing primitives.
 pub mod hashes;
-pub mod options;
+/// `SimpleMerkleTree` — Merkle tree over raw `[u8; 32]` values.
 pub mod simple;
+/// `StandardMerkleTree` — Merkle tree over ABI-encoded Solidity values.
 pub mod standard;
-
-pub use bytes::{Bytes32, HexString, ToBytes32};
-pub use core::MultiProof;
-pub use error::{MerkleTreeError, Result};
-pub use hashes::{NodeHashFn, keccak256, standard_leaf_hash, standard_node_hash};
-pub use options::MerkleTreeOptions;
-pub use simple::{SimpleMerkleTree, SimpleMerkleTreeData, SimpleMerkleTreeOptions};
-pub use standard::{StandardMerkleTree, StandardMerkleTreeData};
+mod tree;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+use pretty_assertions as _;
 
-    #[test]
-    fn test_simple_tree_e2e() {
-        let values: Vec<Bytes32> = (0..4)
-            .map(|i| {
-                let mut bytes = [0u8; 32];
-                bytes[31] = i;
-                bytes
-            })
-            .collect();
-
-        let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
-
-        assert_eq!(tree.len(), 4);
-
-        for value in &values {
-            let proof = tree.get_proof(value).unwrap();
-            assert!(tree.verify_proof(value, &proof).unwrap());
-        }
-
-        let data = tree.dump();
-        let loaded = SimpleMerkleTree::load(data, None).unwrap();
-        assert_eq!(tree.root(), loaded.root());
-    }
-
-    #[test]
-    fn test_standard_tree_e2e() {
-        let values = vec![
-            vec![
-                json!("0x1111111111111111111111111111111111111111"),
-                json!(100u64),
-            ],
-            vec![
-                json!("0x2222222222222222222222222222222222222222"),
-                json!(200u64),
-            ],
-            vec![
-                json!("0x3333333333333333333333333333333333333333"),
-                json!(300u64),
-            ],
-            vec![
-                json!("0x4444444444444444444444444444444444444444"),
-                json!(400u64),
-            ],
-        ];
-
-        let tree = StandardMerkleTree::of(
-            values.clone(),
-            vec!["address".to_string(), "uint256".to_string()],
-            MerkleTreeOptions::default(),
-        )
-        .unwrap();
-
-        assert_eq!(tree.len(), 4);
-
-        for value in &values {
-            let proof = tree.get_proof(value).unwrap();
-            assert!(tree.verify_proof(value, &proof).unwrap());
-        }
-
-        let data = tree.dump();
-        let json_str = serde_json::to_string_pretty(&data).unwrap();
-        let loaded_data: StandardMerkleTreeData = serde_json::from_str(&json_str).unwrap();
-        let loaded = StandardMerkleTree::load(loaded_data).unwrap();
-        assert_eq!(tree.root(), loaded.root());
-    }
-
-    #[test]
-    fn test_static_verification() {
-        let values = vec![
-            vec![
-                json!("0x1111111111111111111111111111111111111111"),
-                json!(100u64),
-            ],
-            vec![
-                json!("0x2222222222222222222222222222222222222222"),
-                json!(200u64),
-            ],
-        ];
-
-        let tree = StandardMerkleTree::of(
-            values.clone(),
-            vec!["address".to_string(), "uint256".to_string()],
-            MerkleTreeOptions::default(),
-        )
-        .unwrap();
-
-        let proof = tree.get_proof(&values[0]).unwrap();
-
-        let result = StandardMerkleTree::verify(
-            tree.root(),
-            &["address".to_string(), "uint256".to_string()],
-            &values[0],
-            &proof,
-        )
-        .unwrap();
-
-        assert!(result);
-    }
-}
+pub use bytes::Bytes32;
+pub use error::{Error, Result};
+pub use hashes::{NodeHashFn, keccak256, standard_leaf_hash, standard_node_hash};
+pub use simple::SimpleMerkleTree;
+pub use simple::SimpleMerkleTreeData;
+pub use standard::{StandardMerkleTree, StandardMerkleTreeData};
+pub use tree::{MultiProof, MultiProofJson};
