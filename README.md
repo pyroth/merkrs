@@ -1,13 +1,29 @@
-# merkrs
+<!-- markdownlint-disable MD033 MD041 MD036 -->
 
-**A Rust library to generate merkle trees and merkle proofs.**
+# Merkrs
 
-Well suited for airdrops and similar mechanisms in combination with Solidity [`OpenZeppelin MerkleProof`] utilities.
+[![Crates.io][crates-badge]][crates-url]
+[![Docs.rs][docs-badge]][docs-url]
+[![CI][ci-badge]][ci-url]
+[![License][license-badge]][license-url]
+[![Rust][rust-badge]][rust-url]
 
-[`OpenZeppelin MerkleProof`]: https://docs.openzeppelin.com/contracts/4.x/api/utils#MerkleProof
+[crates-badge]: https://img.shields.io/crates/v/merkrs.svg
+[crates-url]: https://crates.io/crates/merkrs
+[docs-badge]: https://img.shields.io/docsrs/merkrs.svg
+[docs-url]: https://docs.rs/merkrs
+[ci-badge]: https://github.com/qntx/merkrs/actions/workflows/rust.yml/badge.svg
+[ci-url]: https://github.com/qntx/merkrs/actions/workflows/rust.yml
+[license-badge]: https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg
+[license-url]: LICENSE-MIT
+[rust-badge]: https://img.shields.io/badge/rust-edition%202024-orange.svg
+[rust-url]: https://doc.rust-lang.org/edition-guide/
 
-[![Crates.io](https://img.shields.io/crates/v/merkrs.svg)](https://crates.io/crates/merkrs)
-[![Documentation](https://docs.rs/merkrs/badge.svg)](https://docs.rs/merkrs)
+**Rust library for generating merkle trees and merkle proofs — Keccak256-based, Solidity-compatible, airdrop-ready.**
+
+Well suited for airdrops and allowlists in combination with Solidity [OpenZeppelin MerkleProof] utilities. Supports standard (ABI-encoded, double-hashed) and simple (raw `[u8; 32]`) tree modes, multiproofs, and full serialization.
+
+[OpenZeppelin MerkleProof]: https://docs.openzeppelin.com/contracts/4.x/api/utils#MerkleProof
 
 ## Quick Start
 
@@ -34,7 +50,6 @@ let tree = StandardMerkleTree::new(
 
 println!("Root: {}", encode_hex(tree.root()));
 
-// Serialize for distribution
 let data = tree.to_data();
 let json = serde_json::to_string_pretty(&data).unwrap();
 std::fs::write("tree.json", json).unwrap();
@@ -46,12 +61,10 @@ std::fs::write("tree.json", json).unwrap();
 use merkrs::{StandardMerkleTree, StandardMerkleTreeData};
 use serde_json::json;
 
-// Load tree
 let json_data = std::fs::read_to_string("tree.json").unwrap();
 let data: StandardMerkleTreeData = serde_json::from_str(&json_data).unwrap();
 let tree = StandardMerkleTree::from_data(data).unwrap();
 
-// Get proof by value
 let proof = tree.proof(&vec![
     json!("0x1111111111111111111111111111111111111111"),
     json!("5000000000000000000")
@@ -62,7 +75,7 @@ println!("Proof: {:?}", proof);
 
 ### Validating a Proof in Solidity
 
-Once the proof has been generated, it can be validated in Solidity using [`OpenZeppelin MerkleProof`] as in the following example:
+Once the proof has been generated, it can be validated in Solidity using [OpenZeppelin MerkleProof]:
 
 ```solidity
 pragma solidity ^0.8.4;
@@ -94,28 +107,25 @@ contract Verifier {
 
 1. Store the tree root in your contract.
 2. Compute the [leaf hash](#leaf-hash) for the provided `addr` and `amount` ABI encoded values.
-3. Verify it using [`OpenZeppelin MerkleProof`]'s `verify` function.
+3. Verify it using [OpenZeppelin MerkleProof]'s `verify` function.
 4. Use the verification to make further operations on the contract. (Consider you may want to add a mechanism to prevent reuse of a leaf).
 
-## Standard Merkle Trees
+## Design
 
-This library works on "standard" merkle trees designed for Ethereum smart contracts. We have defined them with a few characteristics that make them secure and good for on-chain verification.
-
-- The tree is shaped as a [complete binary tree](https://xlinux.nist.gov/dads/HTML/completeBinaryTree.html).
-- The leaves are sorted.
-- The leaves are the result of ABI encoding a series of values.
-- The hash used is Keccak256.
-- The leaves are double-hashed[^1] to prevent [second preimage attacks].
+- **Standard trees** — ABI-encoded leaves, Keccak256 hashing, double-hashed[^1] to prevent [second preimage attacks], sorted for deterministic on-chain verification
+- **Simple trees** — Arbitrary `[u8; 32]` leaves, single-hashed, flexible for custom leaf hashing algorithms
+- **Multiproofs** — Prove multiple leaves in a single proof, compatible with OpenZeppelin's on-chain verification
+- **Serialization** — Full tree serialization / deserialization via `serde` for distribution and storage
+- **Complete binary tree** — [Standard shape](https://xlinux.nist.gov/dads/HTML/completeBinaryTree.html) with sorted leaves for secure on-chain verification
+- **Strict linting** — Clippy `pedantic` + `nursery` + `correctness` (deny), zero warnings
 
 [second preimage attacks]: https://flawed.net.nz/2018/02/21/attacking-merkle-trees-with-a-second-preimage-attack/
 
 ## Simple Merkle Trees
 
-The library also supports "simple" merkle trees, which are a simplified version of the standard ones. They are designed to be more flexible and accept arbitrary `[u8; 32]` data as leaves. It keeps the same tree shape and internal pair hashing algorithm.
+The library also supports "simple" merkle trees, which accept arbitrary `[u8; 32]` data as leaves. They keep the same tree shape and internal pair hashing algorithm but without double leaf hashing.
 
-As opposed to standard trees, leaves are not double-hashed. Instead they are hashed once and then hashed in pairs inside the tree. This is useful to override the leaf hashing algorithm and use a different one prior to building the tree.
-
-Users of tooling that produced trees without double leaf hashing can use this feature to build a representation of the tree in Rust. We recommend this approach exclusively for trees that are already built on-chain. Otherwise the standard tree may be a better fit.
+This is useful to override the leaf hashing algorithm and use a different one prior to building the tree. We recommend this approach exclusively for trees that are already built on-chain. Otherwise the standard tree may be a better fit.
 
 ```rust
 use merkrs::{SimpleMerkleTree, simple, Bytes32, keccak256};
@@ -126,7 +136,6 @@ let values: Vec<Bytes32> = vec![
 ];
 
 let tree = SimpleMerkleTree::new(&values, simple::Options::default()).unwrap();
-// SimpleMerkleTree shares the same API as StandardMerkleTree
 ```
 
 ## Advanced Usage
@@ -139,7 +148,7 @@ The Standard Merkle Tree uses an opinionated double leaf hashing algorithm. For 
 bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(addr, amount))));
 ```
 
-This is an opinionated design that we believe will offer the best out of the box experience for most users. However, there are advanced use cases where a different leaf hashing algorithm may be needed. For those, the `SimpleMerkleTree` can be used to build a tree with custom leaf hashing.
+For use cases where a different leaf hashing algorithm is needed, the `SimpleMerkleTree` can be used to build a tree with custom leaf hashing.
 
 ### Leaf Ordering
 
@@ -149,36 +158,51 @@ This library proposes a mechanism to prove (and verify) that sets of leaves are 
 
 Since this library knows the entire tree, you can generate a multiproof with the requested leaves in any order. The library will re-order them so that they appear inside the proof in the correct order. The `MultiProof` object returned by `tree.multi_proof_by_indices(...)` will have the leaves ordered according to their position in the tree, and not in the order in which you provided them.
 
-By default, the library orders the leaves according to their hash when building the tree. This is so that a smart contract can build the hashes of a set of leaves and order them correctly without any knowledge of the tree itself. Said differently, it is simpler for a smart contract to process a multiproof for leaves that it rebuilt itself if the corresponding tree is ordered.
+By default, the library orders the leaves according to their hash when building the tree. This is so that a smart contract can build the hashes of a set of leaves and order them correctly without any knowledge of the tree itself.
 
 However, some trees are constructed iteratively from unsorted data, causing the leaves to be unsorted as well. For this library to be able to represent such trees, the call to `StandardMerkleTree::new` includes an option to disable sorting. Using that option, the leaves are kept in the order in which they were provided. Note that this option has no effect on your ability to generate and verify proofs and multiproofs in Rust, but that it may introduce challenges when verifying multiproofs onchain. We recommend only using it for building a representation of trees that are built (onchain) using an iterative process.
 
 ## Supported Types (StandardMerkleTree)
 
-- `address`
-- `uint256`, `uint128`, `uint64`, `uint32`, `uint16`, `uint8`
-- `int256`
-- `bytes32`
-- `bytes`
-- `bool`
-- `string`
+| Type | Example |
+| --- | --- |
+| `address` | `"0x1111...1111"` |
+| `uint256` / `uint128` / `uint64` / `uint32` / `uint16` / `uint8` | `"5000000000000000000"` |
+| `int256` | `"-1"` |
+| `bytes32` | `"0xabcd...ef01"` |
+| `bytes` | `"0xdeadbeef"` |
+| `bool` | `true` |
+| `string` | `"hello"` |
 
 ## Examples
 
 See the [`examples/`](./merkrs/examples) directory for complete working examples:
 
-- [`simple_tree.rs`](./merkrs/examples/simple_tree.rs) - Simple Merkle Tree construction, proofs, and verification
-- [`standard_tree.rs`](./merkrs/examples/standard_tree.rs) - Standard Merkle Tree with ABI-encoded Solidity values
-- [`multiproof.rs`](./merkrs/examples/multiproof.rs) - Multi-proof generation and verification
-- [`serialization.rs`](./merkrs/examples/serialization.rs) - Tree serialization and deserialization
+- **[`simple_tree.rs`](./merkrs/examples/simple_tree.rs)** — Simple Merkle Tree construction, proofs, and verification
+- **[`standard_tree.rs`](./merkrs/examples/standard_tree.rs)** — Standard Merkle Tree with ABI-encoded Solidity values
+- **[`multiproof.rs`](./merkrs/examples/multiproof.rs)** — Multi-proof generation and verification
+- **[`serialization.rs`](./merkrs/examples/serialization.rs)** — Tree serialization and deserialization
 
 ## License
 
-This project is licensed under either of the following licenses, at your option:
+Licensed under either of:
 
-- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or [https://www.apache.org/licenses/LICENSE-2.0](https://www.apache.org/licenses/LICENSE-2.0))
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or [https://opensource.org/licenses/MIT](https://opensource.org/licenses/MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dually licensed as above, without any additional terms or conditions.
+at your option.
 
-[^1]: The underlying reason for hashing the leaves twice is to prevent the leaf values from being 64 bytes long _prior_ to hashing. Otherwise, the concatenation of a sorted pair of internal nodes in the Merkle tree could be reinterpreted as a leaf value. See [OpenZeppelin issue #3091](https://github.com/OpenZeppelin/openzeppelin-contracts/issues/3091) for more details.
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project shall be dual-licensed as above, without any additional terms or conditions.
+
+---
+
+<div align="center">
+
+A **[QNTX](https://qntx.fun)** open-source project.
+
+<a href="https://qntx.fun"><img alt="QNTX" width="369" src="https://raw.githubusercontent.com/qntx/.github/main/profile/qntx-banner.svg" /></a>
+
+<!--prettier-ignore-->
+Code is law. We write both.
+
+</div>
