@@ -18,7 +18,7 @@ cargo add merkrs
 ### Building a Tree
 
 ```rust
-use merkrs::{StandardMerkleTree, MerkleTreeOptions};
+use merkrs::{StandardMerkleTree, standard, bytes::encode_hex};
 use serde_json::json;
 
 let values = vec![
@@ -26,16 +26,16 @@ let values = vec![
     vec![json!("0x2222222222222222222222222222222222222222"), json!("2500000000000000000")],
 ];
 
-let tree = StandardMerkleTree::of(
+let tree = StandardMerkleTree::new(
     values.clone(),
     vec!["address".to_string(), "uint256".to_string()],
-    MerkleTreeOptions::default(),
+    standard::Options::default(),
 ).unwrap();
 
-println!("Root: {}", tree.root());
+println!("Root: {}", encode_hex(tree.root()));
 
 // Serialize for distribution
-let data = tree.dump();
+let data = tree.to_data();
 let json = serde_json::to_string_pretty(&data).unwrap();
 std::fs::write("tree.json", json).unwrap();
 ```
@@ -43,16 +43,16 @@ std::fs::write("tree.json", json).unwrap();
 ### Obtaining a Proof
 
 ```rust
-use merkrs::{StandardMerkleTree, StandardTreeData};
+use merkrs::{StandardMerkleTree, StandardMerkleTreeData};
 use serde_json::json;
 
 // Load tree
 let json_data = std::fs::read_to_string("tree.json").unwrap();
-let data: StandardTreeData = serde_json::from_str(&json_data).unwrap();
-let tree = StandardMerkleTree::load(data).unwrap();
+let data: StandardMerkleTreeData = serde_json::from_str(&json_data).unwrap();
+let tree = StandardMerkleTree::from_data(data).unwrap();
 
 // Get proof by value
-let proof = tree.get_proof(&vec![
+let proof = tree.proof(&vec![
     json!("0x1111111111111111111111111111111111111111"),
     json!("5000000000000000000")
 ]).unwrap();
@@ -118,14 +118,14 @@ As opposed to standard trees, leaves are not double-hashed. Instead they are has
 Users of tooling that produced trees without double leaf hashing can use this feature to build a representation of the tree in Rust. We recommend this approach exclusively for trees that are already built on-chain. Otherwise the standard tree may be a better fit.
 
 ```rust
-use merkrs::{SimpleMerkleTree, SimpleMerkleTreeOptions, Bytes32, keccak256};
+use merkrs::{SimpleMerkleTree, simple, Bytes32, keccak256};
 
 let values: Vec<Bytes32> = vec![
     keccak256(b"Value 1"),
     keccak256(b"Value 2"),
 ];
 
-let tree = SimpleMerkleTree::of(&values, SimpleMerkleTreeOptions::default()).unwrap();
+let tree = SimpleMerkleTree::new(&values, simple::Options::default()).unwrap();
 // SimpleMerkleTree shares the same API as StandardMerkleTree
 ```
 
@@ -147,11 +147,11 @@ Each leaf of a merkle tree can be proven individually. The relative ordering of 
 
 This library proposes a mechanism to prove (and verify) that sets of leaves are included in the tree. These "multiproofs" can also be verified onchain using the implementation available in `@openzeppelin/contracts`. This mechanism requires the leaves to be ordered respective to their position in the tree. For example, if the tree leaves are (in hex form) `[ 0xAA...AA, 0xBB...BB, 0xCC...CC, 0xDD...DD]`, then you'd be able to prove `[0xBB...BB, 0xDD...DD]` as a subset of the leaves, but not `[0xDD...DD, 0xBB...BB]`.
 
-Since this library knows the entire tree, you can generate a multiproof with the requested leaves in any order. The library will re-order them so that they appear inside the proof in the correct order. The `MultiProof` object returned by `tree.get_multi_proof_by_indices(...)` will have the leaves ordered according to their position in the tree, and not in the order in which you provided them.
+Since this library knows the entire tree, you can generate a multiproof with the requested leaves in any order. The library will re-order them so that they appear inside the proof in the correct order. The `MultiProof` object returned by `tree.multi_proof_by_indices(...)` will have the leaves ordered according to their position in the tree, and not in the order in which you provided them.
 
 By default, the library orders the leaves according to their hash when building the tree. This is so that a smart contract can build the hashes of a set of leaves and order them correctly without any knowledge of the tree itself. Said differently, it is simpler for a smart contract to process a multiproof for leaves that it rebuilt itself if the corresponding tree is ordered.
 
-However, some trees are constructed iteratively from unsorted data, causing the leaves to be unsorted as well. For this library to be able to represent such trees, the call to `StandardMerkleTree::of` includes an option to disable sorting. Using that option, the leaves are kept in the order in which they were provided. Note that this option has no effect on your ability to generate and verify proofs and multiproofs in Rust, but that it may introduce challenges when verifying multiproofs onchain. We recommend only using it for building a representation of trees that are built (onchain) using an iterative process.
+However, some trees are constructed iteratively from unsorted data, causing the leaves to be unsorted as well. For this library to be able to represent such trees, the call to `StandardMerkleTree::new` includes an option to disable sorting. Using that option, the leaves are kept in the order in which they were provided. Note that this option has no effect on your ability to generate and verify proofs and multiproofs in Rust, but that it may introduce challenges when verifying multiproofs onchain. We recommend only using it for building a representation of trees that are built (onchain) using an iterative process.
 
 ## Supported Types (StandardMerkleTree)
 
@@ -167,7 +167,10 @@ However, some trees are constructed iteratively from unsorted data, causing the 
 
 See the [`examples/`](./merkrs/examples) directory for complete working examples:
 
-- [`serialization.rs`](./merkrs/examples/serialization.rs) - Standard Merkle Tree with ABI-encoded values and serialization
+- [`simple_tree.rs`](./merkrs/examples/simple_tree.rs) - Simple Merkle Tree construction, proofs, and verification
+- [`standard_tree.rs`](./merkrs/examples/standard_tree.rs) - Standard Merkle Tree with ABI-encoded Solidity values
+- [`multiproof.rs`](./merkrs/examples/multiproof.rs) - Multi-proof generation and verification
+- [`serialization.rs`](./merkrs/examples/serialization.rs) - Tree serialization and deserialization
 
 ## License
 

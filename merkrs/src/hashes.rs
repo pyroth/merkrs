@@ -1,3 +1,5 @@
+//! Keccak-256 hashing primitives.
+
 use sha3::{Digest, Keccak256};
 
 use crate::bytes::{Bytes32, concat_sorted};
@@ -5,10 +7,7 @@ use crate::bytes::{Bytes32, concat_sorted};
 /// Compute the Keccak-256 hash of arbitrary data.
 #[must_use]
 pub fn keccak256(data: &[u8]) -> Bytes32 {
-    let hash = Keccak256::digest(data);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&hash);
-    out
+    Keccak256::digest(data).into()
 }
 
 /// Double-hash used for standard Merkle tree leaves (prevents second-preimage attacks).
@@ -29,13 +28,13 @@ pub fn standard_node_hash(a: &Bytes32, b: &Bytes32) -> Bytes32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bytes::bytes_to_hex;
+    use crate::bytes::encode_hex;
 
     #[test]
     fn keccak256_known_value() {
         let hash = keccak256(b"hello");
         assert_eq!(
-            bytes_to_hex(&hash),
+            encode_hex(&hash),
             "0x1c8aff950685c2ed4bc3174f3472287b56d9517b9c948127319a09a7a36deac8"
         );
     }
@@ -44,7 +43,7 @@ mod tests {
     fn keccak256_empty() {
         let hash = keccak256(b"");
         assert_eq!(
-            bytes_to_hex(&hash),
+            encode_hex(&hash),
             "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
         );
     }

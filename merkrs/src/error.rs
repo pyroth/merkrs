@@ -1,7 +1,13 @@
+//! Error types and the crate-level [`Result`] alias.
+
 use thiserror::Error;
 
 /// Errors that can occur during Merkle tree operations.
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::error_impl_error,
+    reason = "Error is the canonical name for this crate's error type"
+)]
 pub enum Error {
     /// The leaf set was empty.
     #[error("expected at least one leaf")]
@@ -68,9 +74,17 @@ pub enum Error {
         flags: usize,
     },
 
-    /// The multi-proof processing stack underflowed.
-    #[error("multiproof processing failed: {0}")]
-    MultiproofUnderflow(&'static str),
+    /// The multi-proof stack was empty when an operand was needed.
+    #[error("multiproof stack underflow")]
+    MultiproofStackEmpty,
+
+    /// The multi-proof auxiliary proof iterator was exhausted.
+    #[error("multiproof proof exhausted")]
+    MultiproofProofExhausted,
+
+    /// After processing, the stack did not converge to a single root.
+    #[error("multiproof did not converge to a single root")]
+    MultiproofNotConverged,
 
     /// An unrecognised serialisation format string was encountered.
     #[error("unknown format: {0}")]

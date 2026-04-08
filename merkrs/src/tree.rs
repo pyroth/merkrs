@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
-use std::fmt;
+use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::bytes::{Bytes32, bytes_to_hex, hex_to_bytes};
+use crate::bytes::{Bytes32, decode_hex, encode_hex};
 use crate::error::{Error, Result};
 use crate::hashes::NodeHashFn;
 
@@ -47,7 +47,7 @@ const fn is_leaf(tree_len: usize, i: usize) -> bool {
     i < tree_len && !is_internal(tree_len, i)
 }
 
-fn check_leaf(tree_len: usize, i: usize) -> Result<()> {
+const fn check_leaf(tree_len: usize, i: usize) -> Result<()> {
     if is_leaf(tree_len, i) {
         Ok(())
     } else {
@@ -67,12 +67,36 @@ pub(crate) fn build(leaves: &[Bytes32], node_hash: NodeHashFn) -> Result<Vec<Byt
     let tree_len = 2 * n - 1;
     let mut tree = vec![[0u8; 32]; tree_len];
 
-    for (i, leaf) in leaves.iter().enumerate() {
-        tree[tree_len - 1 - i] = *leaf;
+    // Populate leaf slots (rightmost n positions).
+    let leaf_start = tree_len - n;
+    for (slot, leaf) in tree
+        .get_mut(leaf_start..)
+        .ok_or(Error::EmptyLeaves)?
+        .iter_mut()
+        .rev()
+        .zip(leaves)
+    {
+        *slot = *leaf;
     }
 
-    for i in (0..tree_len - n).rev() {
-        tree[i] = node_hash(&tree[left_child(i)], &tree[right_child(i)]);
+    // Build internal nodes bottom-up.
+    for i in (0..leaf_start).rev() {
+        let l = left_child(i);
+        let r = right_child(i);
+        let hash = node_hash(
+            tree.get(l).ok_or(Error::IndexOutOfBounds {
+                index: l,
+                len: tree_len,
+            })?,
+            tree.get(r).ok_or(Error::IndexOutOfBounds {
+                index: r,
+                len: tree_len,
+            })?,
+        );
+        *tree.get_mut(i).ok_or(Error::IndexOutOfBounds {
+            index: i,
+            len: tree_len,
+        })? = hash;
     }
 
     Ok(tree)
@@ -84,18 +108,18 @@ pub(crate) fn proof(tree: &[Bytes32], index: usize) -> Result<Vec<Bytes32>> {
     let mut result = Vec::new();
     let mut idx = index;
     while idx > 0 {
-        result.push(tree[sibling(idx)?]);
+        let sib = sibling(idx)?;
+        result.push(*tree.get(sib).ok_or(Error::IndexOutOfBounds {
+            index: sib,
+            len: tree.len(),
+        })?);
         idx = parent(idx)?;
     }
     Ok(result)
 }
 
 /// Recompute the root from a leaf and its proof.
-pub(crate) fn process_proof(
-    leaf: &Bytes32,
-    proof: &[Bytes32],
-    node_hash: NodeHashFn,
-) -> Bytes32 {
+pub(crate) fn process_proof(leaf: &Bytes32, proof: &[Bytes32], node_hash: NodeHashFn) -> Bytes32 {
     let mut current = *leaf;
     for sib in proof {
         current = node_hash(&current, sib);
@@ -111,13 +135,20 @@ pub(crate) fn is_valid(tree: &[Bytes32], node_hash: NodeHashFn) -> bool {
     for i in 0..tree.len() {
         let l = left_child(i);
         let r = right_child(i);
-        if r < tree.len() {
-            if tree[i] != node_hash(&tree[l], &tree[r]) {
+        match (tree.get(l), tree.get(r)) {
+            (Some(lv), Some(rv)) => {
+                let Some(node) = tree.get(i) else {
+                    return false;
+                };
+                if *node != node_hash(lv, rv) {
+                    return false;
+                }
+            }
+            (Some(_), None) => {
+                // Unbalanced internal node with only a left child — invalid shape.
                 return false;
             }
-        } else if l < tree.len() {
-            // Unbalanced internal node with only a left child — invalid shape.
-            return false;
+            _ => {}
         }
     }
     true
@@ -144,9 +175,11 @@ pub(crate) fn multi_proof(tree: &[Bytes32], indices: &[usize]) -> Result<MultiPr
     let mut sorted: Vec<usize> = indices.to_vec();
     sorted.sort_unstable_by(|a, b| b.cmp(a));
 
-    for w in sorted.windows(2) {
-        if w[0] == w[1] {
-            return Err(Error::DuplicateIndex(w[0]));
+    for pair in sorted.windows(2) {
+        if let [a, b] = *pair
+            && a == b
+        {
+            return Err(Error::DuplicateIndex(a));
         }
     }
 
@@ -166,16 +199,27 @@ pub(crate) fn multi_proof(tree: &[Bytes32], indices: &[usize]) -> Result<MultiPr
             queue.pop_front();
         } else {
             flags.push(false);
-            proof_nodes.push(tree[s]);
+            proof_nodes.push(*tree.get(s).ok_or(Error::IndexOutOfBounds {
+                index: s,
+                len: tree.len(),
+            })?);
         }
         queue.push_back(p);
     }
 
     if indices.is_empty() {
-        proof_nodes.push(tree[0]);
+        proof_nodes.push(*tree.first().ok_or(Error::EmptyLeaves)?);
     }
 
-    let leaves: Vec<Bytes32> = sorted.iter().map(|&i| tree[i]).collect();
+    let leaves: Vec<Bytes32> = sorted
+        .iter()
+        .map(|&i| {
+            tree.get(i).copied().ok_or(Error::IndexOutOfBounds {
+                index: i,
+                len: tree.len(),
+            })
+        })
+        .collect::<Result<_>>()?;
 
     Ok(MultiProof {
         leaves,
@@ -205,35 +249,21 @@ pub(crate) fn process_multi_proof(mp: &MultiProof, node_hash: NodeHashFn) -> Res
     let mut proof_iter = mp.proof.iter();
 
     for &flag in &mp.proof_flags {
-        let a = stack
-            .pop_front()
-            .ok_or(Error::MultiproofUnderflow("stack empty for first operand"))?;
+        let a = stack.pop_front().ok_or(Error::MultiproofStackEmpty)?;
         let b = if flag {
-            stack
-                .pop_front()
-                .ok_or(Error::MultiproofUnderflow("stack empty for second operand"))?
+            stack.pop_front().ok_or(Error::MultiproofStackEmpty)?
         } else {
-            *proof_iter
-                .next()
-                .ok_or(Error::MultiproofUnderflow("proof exhausted"))?
+            *proof_iter.next().ok_or(Error::MultiproofProofExhausted)?
         };
         stack.push_back(node_hash(&a, &b));
     }
 
     let remaining: usize = stack.len() + proof_iter.count();
     if remaining != 1 {
-        return Err(Error::MultiproofUnderflow(
-            "stack + proof should have exactly one element",
-        ));
+        return Err(Error::MultiproofNotConverged);
     }
 
-    Ok(stack.pop_front().unwrap_or_else(|| {
-        // proof_iter had the last element — but we already consumed the iterator.
-        // This branch is unreachable because remaining == 1 and stack is empty
-        // would mean proof_iter.count() == 1, but we already called .count() above.
-        // Safety: we handle this via the error above.
-        [0u8; 32]
-    }))
+    stack.pop_front().ok_or(Error::MultiproofStackEmpty)
 }
 
 /// Render a tree as an indented string for debugging.
@@ -253,8 +283,11 @@ pub(crate) fn render(tree: &[Bytes32]) -> Result<String> {
             output.push_str(if is_left { "├─ " } else { "└─ " });
         }
 
-        use fmt::Write;
-        let _ = writeln!(output, "{i}) {}", bytes_to_hex(&tree[i]));
+        let node = tree.get(i).ok_or(Error::IndexOutOfBounds {
+            index: i,
+            len: tree.len(),
+        })?;
+        _ = writeln!(output, "{i}) {}", encode_hex(node));
 
         let r = right_child(i);
         if r < tree.len() {
@@ -295,12 +328,12 @@ impl TryFrom<MultiProofJson> for MultiProof {
         let leaves = json
             .leaves
             .iter()
-            .map(|s| hex_to_bytes(s))
+            .map(|s| decode_hex(s))
             .collect::<Result<Vec<_>>>()?;
         let proof = json
             .proof
             .iter()
-            .map(|s| hex_to_bytes(s))
+            .map(|s| decode_hex(s))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             leaves,
@@ -313,8 +346,8 @@ impl TryFrom<MultiProofJson> for MultiProof {
 impl From<&MultiProof> for MultiProofJson {
     fn from(mp: &MultiProof) -> Self {
         Self {
-            leaves: mp.leaves.iter().map(bytes_to_hex).collect(),
-            proof: mp.proof.iter().map(bytes_to_hex).collect(),
+            leaves: mp.leaves.iter().map(encode_hex).collect(),
+            proof: mp.proof.iter().map(encode_hex).collect(),
             proof_flags: mp.proof_flags.clone(),
         }
     }
@@ -364,8 +397,8 @@ mod tests {
         let first_leaf = tree.len() - leaves.len();
         for i in first_leaf..tree.len() {
             let p = proof(&tree, i).unwrap();
-            let root = process_proof(&tree[i], &p, standard_node_hash);
-            assert_eq!(root, tree[0], "proof failed for index {i}");
+            let root = process_proof(tree.get(i).unwrap(), &p, standard_node_hash);
+            assert_eq!(root, *tree.first().unwrap(), "proof failed for index {i}");
         }
     }
 
@@ -375,7 +408,7 @@ mod tests {
         let tree = build(&leaves, standard_node_hash).unwrap();
         let mp = multi_proof(&tree, &[4, 5]).unwrap();
         let root = process_multi_proof(&mp, standard_node_hash).unwrap();
-        assert_eq!(root, tree[0]);
+        assert_eq!(root, *tree.first().unwrap());
     }
 
     #[test]
@@ -385,7 +418,7 @@ mod tests {
         let indices: Vec<usize> = (tree.len() - leaves.len()..tree.len()).collect();
         let mp = multi_proof(&tree, &indices).unwrap();
         let root = process_multi_proof(&mp, standard_node_hash).unwrap();
-        assert_eq!(root, tree[0]);
+        assert_eq!(root, *tree.first().unwrap());
     }
 
     #[test]
@@ -395,7 +428,7 @@ mod tests {
         let mp = multi_proof(&tree, &[]).unwrap();
         assert!(mp.leaves.is_empty());
         assert_eq!(mp.proof.len(), 1);
-        assert_eq!(mp.proof[0], tree[0]);
+        assert_eq!(*mp.proof.first().unwrap(), *tree.first().unwrap());
     }
 
     #[test]
