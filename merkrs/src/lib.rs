@@ -14,13 +14,16 @@
 //! ## Quick start
 //!
 //! ```rust
-//! use merkrs::{SimpleMerkleTree, simple::Options, Bytes32};
+//! use merkrs::{Bytes32, SimpleMerkleTree, simple};
 //!
+//! # fn main() -> merkrs::Result<()> {
 //! let values: Vec<Bytes32> = vec![[1u8; 32], [2u8; 32], [3u8; 32], [4u8; 32]];
-//! let tree = SimpleMerkleTree::new(&values, Options::default()).unwrap();
+//! let tree = SimpleMerkleTree::new(&values, simple::Options::default())?;
 //!
-//! let proof = tree.proof(&values[0]).unwrap();
-//! assert!(tree.verify_proof(&values[0], &proof).unwrap());
+//! let proof = tree.proof(&values[0])?;
+//! assert!(tree.verify_proof(&values[0], &proof)?);
+//! # Ok(())
+//! # }
 //! ```
 
 mod abi;
@@ -30,15 +33,14 @@ pub mod hashes;
 pub mod merkle;
 pub mod simple;
 pub mod standard;
-mod tree;
+pub mod tree;
 
 pub use bytes::Bytes32;
 pub use error::{Error, Result};
-pub use hashes::{NodeHashFn, keccak256, standard_leaf_hash, standard_node_hash};
+pub use hashes::{NodeHashFn, NodeHashKind, keccak256, standard_leaf_hash, standard_node_hash};
 pub use merkle::{LeafHasher, MerkleTree};
 #[cfg(test)]
 use pretty_assertions as _;
-pub use simple::SimpleMerkleTree;
-pub use simple::SimpleMerkleTreeData;
+pub use simple::{SimpleMerkleTree, SimpleMerkleTreeData};
 pub use standard::{StandardMerkleTree, StandardMerkleTreeData};
 pub use tree::{MultiProof, MultiProofJson};

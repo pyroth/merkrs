@@ -54,6 +54,10 @@ pub enum Error {
     #[error("unable to prove value at index {0}")]
     UnableToProve(usize),
 
+    /// A generated multi-proof did not verify against the root.
+    #[error("generated multi-proof does not verify against the root")]
+    UnableToProveMulti,
+
     /// Proof-element count mismatch in a multi-proof.
     #[error("invalid multiproof: expected {expected} proof elements, got {got}")]
     InvalidMultiproof {
@@ -90,6 +94,17 @@ pub enum Error {
     #[error("unknown format: {0}")]
     UnknownFormat(String),
 
+    /// Serialised tree declared a custom node hash but none was supplied (or vice-versa).
+    #[error(
+        "node-hash kind mismatch: serialised tree is '{serialized}' but caller provided '{provided}'"
+    )]
+    NodeHashKindMismatch {
+        /// What the serialised tree claims.
+        serialized: &'static str,
+        /// What the caller actually passed.
+        provided: &'static str,
+    },
+
     /// The `leaf_encoding` field was empty when loading a standard tree.
     #[error("missing leaf encoding")]
     MissingLeafEncoding,
@@ -105,6 +120,12 @@ pub enum Error {
     /// A byte slice was not exactly 32 bytes.
     #[error("node must be exactly 32 bytes, got {0}")]
     InvalidNodeLength(usize),
+}
+
+impl From<hex::FromHexError> for Error {
+    fn from(err: hex::FromHexError) -> Self {
+        Self::HexDecode(err.to_string())
+    }
 }
 
 /// Convenience alias used throughout the crate.

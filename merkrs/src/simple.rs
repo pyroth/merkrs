@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::bytes::{Bytes32, decode_hex, encode_hex};
 use crate::error::{Error, Result};
-use crate::hashes::{NodeHashFn, keccak256, standard_node_hash};
-use crate::merkle::{LeafHasher, MerkleTree, TreeParts};
+use crate::hashes::{NodeHashFn, NodeHashKind, keccak256, standard_node_hash};
+use crate::merkle::{LeafHasher, MerkleTree, TreeParts, build_sorted_tree};
 use crate::tree::{self, MultiProof};
 
 const FORMAT: &str = "simple-v1";
@@ -40,9 +40,9 @@ pub struct SimpleMerkleTreeData {
     pub tree: Vec<String>,
     /// Original values with their tree positions.
     pub values: Vec<ValueEntry>,
-    /// Set to `"custom"` when a non-default node hash was used.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
+    /// Records which node-hash strategy produced this tree. Absent for the default.
+    #[serde(default, rename = "hash", skip_serializing_if = "Option::is_none")]
+    pub node_hash_kind: Option<NodeHashKind>,
 }
 
 /// One value stored in a [`SimpleMerkleTree`].
@@ -73,6 +73,22 @@ impl Default for Options {
     }
 }
 
+impl Options {
+    /// Set whether to sort leaves by hash before building the tree.
+    #[must_use]
+    pub const fn with_sort_leaves(mut self, sort: bool) -> Self {
+        self.sort_leaves = sort;
+        self
+    }
+
+    /// Use a non-default node-hashing function.
+    #[must_use]
+    pub const fn with_node_hash(mut self, node_hash: NodeHashFn) -> Self {
+        self.node_hash = Some(node_hash);
+        self
+    }
+}
+
 impl SimpleMerkleTree {
     /// Build a new tree from raw 32-byte values.
     ///
@@ -85,26 +101,12 @@ impl SimpleMerkleTree {
         }
 
         let node_hash_fn = options.node_hash.unwrap_or(standard_node_hash);
-
-        let mut indexed: Vec<(usize, Bytes32)> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| (i, keccak256(v)))
-            .collect();
-
-        if options.sort_leaves {
-            indexed.sort_unstable_by_key(|a| a.1);
-        }
-
-        let leaves: Vec<Bytes32> = indexed.iter().map(|(_, h)| *h).collect();
-        let tree = tree::build(&leaves, node_hash_fn)?;
-
-        let mut tree_indices = vec![0usize; values.len()];
-        for (leaf_pos, &(value_idx, _)) in indexed.iter().enumerate() {
-            if let Some(slot) = tree_indices.get_mut(value_idx) {
-                *slot = tree.len() - 1 - leaf_pos;
-            }
-        }
+        let (tree, tree_indices) = build_sorted_tree(
+            values,
+            |v| Ok(keccak256(v)),
+            options.sort_leaves,
+            node_hash_fn,
+        )?;
 
         Ok(Self::from_parts(TreeParts {
             hasher: SimpleHasher,
@@ -120,18 +122,30 @@ impl SimpleMerkleTree {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnknownFormat`] if the format string is unexpected, or
-    /// propagates any hex-decode / validation error.
+    /// Returns [`Error::UnknownFormat`] if the format string is unexpected,
+    /// [`Error::NodeHashKindMismatch`] if the caller's `node_hash` option does
+    /// not match the serialised kind, or propagates any hex-decode / validation
+    /// error.
     pub fn from_data(data: SimpleMerkleTreeData, node_hash: Option<NodeHashFn>) -> Result<Self> {
         if data.format != FORMAT {
             return Err(Error::UnknownFormat(data.format));
         }
 
-        let has_custom = data.hash.as_deref() == Some("custom");
-        if node_hash.is_some() != has_custom {
-            return Err(Error::UnknownFormat(
-                "node_hash option does not match serialised hash field".into(),
-            ));
+        let serialized_is_custom = data.node_hash_kind == Some(NodeHashKind::Custom);
+        let provided_is_custom = node_hash.is_some();
+        if serialized_is_custom != provided_is_custom {
+            return Err(Error::NodeHashKindMismatch {
+                serialized: if serialized_is_custom {
+                    "custom"
+                } else {
+                    "standard"
+                },
+                provided: if provided_is_custom {
+                    "custom"
+                } else {
+                    "standard"
+                },
+            });
         }
 
         let node_hash_fn = node_hash.unwrap_or(standard_node_hash);
@@ -155,7 +169,7 @@ impl SimpleMerkleTree {
             values,
             tree_indices,
             node_hash: node_hash_fn,
-            custom_node_hash: has_custom,
+            custom_node_hash: serialized_is_custom,
         });
         me.validate()?;
         Ok(me)
@@ -206,11 +220,7 @@ impl SimpleMerkleTree {
             format: FORMAT.into(),
             tree: tree_hex,
             values,
-            hash: if self.custom_node_hash {
-                Some("custom".into())
-            } else {
-                None
-            },
+            node_hash_kind: self.custom_node_hash.then_some(NodeHashKind::Custom),
         }
     }
 }
@@ -341,11 +351,26 @@ mod tests {
             format: "bad".into(),
             tree: vec![],
             values: vec![],
-            hash: None,
+            node_hash_kind: None,
         };
         assert!(matches!(
             SimpleMerkleTree::from_data(data, None),
             Err(Error::UnknownFormat(_))
+        ));
+    }
+
+    #[test]
+    fn node_hash_kind_mismatch_rejected() {
+        let vals = test_values(4);
+        let tree = SimpleMerkleTree::new(&vals, Options::default()).unwrap();
+        let data = tree.to_data();
+        assert!(data.node_hash_kind.is_none());
+
+        let mut tampered = data;
+        tampered.node_hash_kind = Some(NodeHashKind::Custom);
+        assert!(matches!(
+            SimpleMerkleTree::from_data(tampered, None),
+            Err(Error::NodeHashKindMismatch { .. })
         ));
     }
 

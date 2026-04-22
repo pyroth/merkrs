@@ -1,160 +1,123 @@
 //! Solidity ABI encoding for [`StandardMerkleTree`](crate::StandardMerkleTree) leaves.
+//!
+//! JSON values are coerced into [`alloy_dyn_abi::DynSolValue`]s, assembled as a
+//! tuple, and encoded with the standard non-packed ABI layout to match
+//! `abi.encode(...)` in Solidity.
 
-use alloy_sol_types::SolValue;
+use alloy_dyn_abi::{DynSolType, DynSolValue};
+use alloy_primitives::{Address, B256, I256, U256};
+use serde_json::Value;
 
 use crate::bytes::Bytes32;
 use crate::error::{Error, Result};
 use crate::hashes::standard_leaf_hash;
 
-/// Compute the double-hashed leaf from ABI-typed values.
-pub(crate) fn compute_leaf_hash(types: &[String], values: &[serde_json::Value]) -> Result<Bytes32> {
-    let encoded = encode_leaf(types, values)?;
-    Ok(standard_leaf_hash(&encoded))
-}
-
-fn encode_leaf(types: &[String], values: &[serde_json::Value]) -> Result<Vec<u8>> {
+/// Compute the double-hashed leaf (`keccak256(keccak256(abi.encode(values)))`).
+pub(crate) fn compute_leaf_hash(types: &[String], values: &[Value]) -> Result<Bytes32> {
     if types.len() != values.len() {
-        return Err(Error::AbiEncode("types and values length mismatch".into()));
+        return Err(Error::AbiEncode(format!(
+            "type/value length mismatch: {} types vs {} values",
+            types.len(),
+            values.len()
+        )));
     }
-    let mut encoded = Vec::new();
-    for (sol_type, value) in types.iter().zip(values.iter()) {
-        encoded.extend(encode_single_value(sol_type, value)?);
-    }
-    Ok(encoded)
+
+    let coerced = types
+        .iter()
+        .zip(values)
+        .map(|(ty, val)| {
+            let parsed = DynSolType::parse(ty)
+                .map_err(|e| Error::AbiEncode(format!("invalid type '{ty}': {e}")))?;
+            json_to_dyn_value(&parsed, val)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(standard_leaf_hash(
+        &DynSolValue::Tuple(coerced).abi_encode(),
+    ))
 }
 
-fn encode_single_value(sol_type: &str, value: &serde_json::Value) -> Result<Vec<u8>> {
-    match sol_type {
-        "address" => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| Error::AbiEncode("expected string for address".into()))?;
-            let addr: alloy_primitives::Address = s
+fn json_to_dyn_value(ty: &DynSolType, value: &Value) -> Result<DynSolValue> {
+    match ty {
+        DynSolType::Address => {
+            let addr: Address = expect_str(value, "address")?
                 .parse()
                 .map_err(|e| Error::AbiEncode(format!("invalid address: {e}")))?;
-            Ok(addr.abi_encode())
+            Ok(DynSolValue::Address(addr))
         }
-        "uint256" => Ok(parse_uint256(value)?.abi_encode()),
-        "uint128" => {
-            let n: u128 = parse_uint_generic(value)?;
-            Ok(alloy_primitives::U256::from(n).abi_encode())
+        DynSolType::Bool => {
+            let b = match value {
+                Value::Bool(b) => *b,
+                Value::String(s) => s
+                    .parse()
+                    .map_err(|e| Error::AbiEncode(format!("invalid bool: {e}")))?,
+                _ => return Err(Error::AbiEncode("expected bool".into())),
+            };
+            Ok(DynSolValue::Bool(b))
         }
-        "uint64" => {
-            let n: u64 = parse_uint_generic(value)?;
-            Ok(alloy_primitives::U256::from(n).abi_encode())
-        }
-        "uint32" => {
-            let n: u32 = parse_uint_generic(value)?;
-            Ok(alloy_primitives::U256::from(n).abi_encode())
-        }
-        "uint16" => {
-            let n: u16 = parse_uint_generic(value)?;
-            Ok(alloy_primitives::U256::from(n).abi_encode())
-        }
-        "uint8" => {
-            let n: u8 = parse_uint_generic(value)?;
-            Ok(alloy_primitives::U256::from(n).abi_encode())
-        }
-        "int256" => Ok(parse_int256(value)?.abi_encode()),
-        "bytes32" => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| Error::AbiEncode("expected string for bytes32".into()))?;
-            let b32: alloy_primitives::B256 = s
+        DynSolType::Uint(bits) => Ok(DynSolValue::Uint(parse_u256(value)?, *bits)),
+        DynSolType::Int(bits) => Ok(DynSolValue::Int(parse_i256(value)?, *bits)),
+        DynSolType::FixedBytes(n) => {
+            let b32: B256 = expect_str(value, "fixed bytes")?
                 .parse()
-                .map_err(|e| Error::AbiEncode(format!("invalid bytes32: {e}")))?;
-            Ok(b32.abi_encode())
+                .map_err(|e| Error::AbiEncode(format!("invalid bytes{n}: {e}")))?;
+            Ok(DynSolValue::FixedBytes(b32, *n))
         }
-        "bytes" => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| Error::AbiEncode("expected string for bytes".into()))?;
-            let s = s.strip_prefix("0x").unwrap_or(s);
+        DynSolType::Bytes => {
+            let s = expect_str(value, "bytes")?;
+            let stripped = s.strip_prefix("0x").unwrap_or(s);
             let bytes =
-                hex::decode(s).map_err(|e| Error::AbiEncode(format!("invalid hex: {e}")))?;
-            Ok(alloy_primitives::Bytes::from(bytes).abi_encode())
+                hex::decode(stripped).map_err(|e| Error::AbiEncode(format!("invalid hex: {e}")))?;
+            Ok(DynSolValue::Bytes(bytes))
         }
-        "bool" => {
-            let b = value
-                .as_bool()
-                .ok_or_else(|| Error::AbiEncode("expected bool".into()))?;
-            Ok(if b {
-                alloy_primitives::U256::from(1)
-            } else {
-                alloy_primitives::U256::ZERO
-            }
-            .abi_encode())
-        }
-        "string" => {
-            let s = value
-                .as_str()
-                .ok_or_else(|| Error::AbiEncode("expected string".into()))?;
-            Ok(s.to_owned().abi_encode())
-        }
-        _ => Err(Error::AbiEncode(format!("unsupported type: {sol_type}"))),
+        DynSolType::String => Ok(DynSolValue::String(expect_str(value, "string")?.to_owned())),
+        other => Err(Error::AbiEncode(format!("unsupported type: {other}"))),
     }
 }
 
-fn parse_uint256(value: &serde_json::Value) -> Result<alloy_primitives::U256> {
+fn expect_str<'v>(value: &'v Value, kind: &str) -> Result<&'v str> {
+    value
+        .as_str()
+        .ok_or_else(|| Error::AbiEncode(format!("expected string for {kind}")))
+}
+
+fn parse_u256(value: &Value) -> Result<U256> {
     match value {
-        serde_json::Value::Number(n) => n
-            .as_u64()
-            .map(alloy_primitives::U256::from)
-            .ok_or_else(|| Error::AbiEncode("number too large for u64, use string".into())),
-        serde_json::Value::String(s) => {
-            let s = s.trim();
-            s.strip_prefix("0x").map_or_else(
+        Value::Number(n) => n
+            .as_u128()
+            .map(U256::from)
+            .ok_or_else(|| Error::AbiEncode("number too large for u128; use string".into())),
+        Value::String(s) => {
+            let trimmed = s.trim();
+            trimmed.strip_prefix("0x").map_or_else(
                 || {
-                    alloy_primitives::U256::from_str_radix(s, 10)
-                        .map_err(|e| Error::AbiEncode(format!("invalid uint256: {e}")))
+                    U256::from_str_radix(trimmed, 10)
+                        .map_err(|e| Error::AbiEncode(format!("invalid uint: {e}")))
                 },
-                |hex_str| {
-                    alloy_primitives::U256::from_str_radix(hex_str, 16)
-                        .map_err(|e| Error::AbiEncode(format!("invalid hex uint256: {e}")))
+                |hex| {
+                    U256::from_str_radix(hex, 16)
+                        .map_err(|e| Error::AbiEncode(format!("invalid hex uint: {e}")))
                 },
             )
         }
         _ => Err(Error::AbiEncode(
-            "expected number or string for uint256".into(),
+            "expected number or string for uint".into(),
         )),
     }
 }
 
-fn parse_int256(value: &serde_json::Value) -> Result<alloy_primitives::I256> {
+fn parse_i256(value: &Value) -> Result<I256> {
     match value {
-        serde_json::Value::Number(n) => n
-            .as_i64()
-            .ok_or_else(|| Error::AbiEncode("number too large, use string".into()))
+        Value::Number(n) => n
+            .as_i128()
+            .ok_or_else(|| Error::AbiEncode("number too large for i128; use string".into()))
             .and_then(|i| {
-                alloy_primitives::I256::try_from(i)
-                    .map_err(|e| Error::AbiEncode(format!("invalid int256: {e}")))
+                I256::try_from(i).map_err(|e| Error::AbiEncode(format!("invalid int: {e}")))
             }),
-        serde_json::Value::String(s) => s
+        Value::String(s) => s
             .trim()
-            .parse::<alloy_primitives::I256>()
-            .map_err(|e| Error::AbiEncode(format!("invalid int256: {e}"))),
-        _ => Err(Error::AbiEncode(
-            "expected number or string for int256".into(),
-        )),
-    }
-}
-
-fn parse_uint_generic<T: std::str::FromStr + TryFrom<u64>>(value: &serde_json::Value) -> Result<T>
-where
-    <T as std::str::FromStr>::Err: std::fmt::Display,
-    <T as TryFrom<u64>>::Error: std::fmt::Display,
-{
-    match value {
-        serde_json::Value::Number(n) => n
-            .as_u64()
-            .ok_or_else(|| Error::AbiEncode("invalid number".into()))
-            .and_then(|u| {
-                T::try_from(u)
-                    .map_err(|e| Error::AbiEncode(format!("number conversion error: {e}")))
-            }),
-        serde_json::Value::String(s) => s
-            .parse::<T>()
-            .map_err(|e| Error::AbiEncode(format!("invalid number: {e}"))),
-        _ => Err(Error::AbiEncode("expected number or string".into())),
+            .parse::<I256>()
+            .map_err(|e| Error::AbiEncode(format!("invalid int: {e}"))),
+        _ => Err(Error::AbiEncode("expected number or string for int".into())),
     }
 }

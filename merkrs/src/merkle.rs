@@ -59,6 +59,46 @@ pub(crate) struct TreeParts<H: LeafHasher> {
     pub custom_node_hash: bool,
 }
 
+/// Hash every value, optionally sort by hash, build the tree and compute
+/// the original-index → tree-index mapping.
+///
+/// This is the shared core used by both [`SimpleMerkleTree::new`] and
+/// [`StandardMerkleTree::new`].
+///
+/// [`SimpleMerkleTree::new`]: crate::SimpleMerkleTree::new
+/// [`StandardMerkleTree::new`]: crate::StandardMerkleTree::new
+pub(crate) fn build_sorted_tree<V, F>(
+    values: &[V],
+    mut hash_leaf: F,
+    sort_leaves: bool,
+    node_hash: NodeHashFn,
+) -> Result<(Vec<Bytes32>, Vec<usize>)>
+where
+    F: FnMut(&V) -> Result<Bytes32>,
+{
+    let mut indexed: Vec<(usize, Bytes32)> = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| hash_leaf(v).map(|h| (i, h)))
+        .collect::<Result<_>>()?;
+
+    if sort_leaves {
+        indexed.sort_unstable_by_key(|(_, h)| *h);
+    }
+
+    let leaves: Vec<Bytes32> = indexed.iter().map(|(_, h)| *h).collect();
+    let tree = tree::build(&leaves, node_hash)?;
+
+    let mut tree_indices = vec![0usize; values.len()];
+    for (leaf_pos, &(value_idx, _)) in indexed.iter().enumerate() {
+        if let Some(slot) = tree_indices.get_mut(value_idx) {
+            *slot = tree.len() - 1 - leaf_pos;
+        }
+    }
+
+    Ok((tree, tree_indices))
+}
+
 impl<H: LeafHasher + std::fmt::Debug> MerkleTree<H>
 where
     H::Value: std::fmt::Debug,
@@ -193,7 +233,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`Error::IndexOutOfBounds`] or [`Error::UnableToProve`] on failure.
+    /// Returns [`Error::IndexOutOfBounds`] if any index is invalid, or
+    /// [`Error::UnableToProveMulti`] if the generated proof does not verify.
     pub fn multi_proof_by_indices(&self, indices: &[usize]) -> Result<MultiProof> {
         let len = self.tree_indices.len();
         let tree_indices: Vec<usize> = indices
@@ -208,7 +249,7 @@ where
         let mp = tree::multi_proof(&self.tree, &tree_indices)?;
         let root = tree::process_multi_proof(&mp, self.node_hash)?;
         if root != *self.root() {
-            return Err(Error::UnableToProve(0));
+            return Err(Error::UnableToProveMulti);
         }
         Ok(mp)
     }

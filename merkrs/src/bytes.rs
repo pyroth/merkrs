@@ -13,7 +13,7 @@ pub type Bytes32 = [u8; 32];
 /// [`Error::InvalidNodeLength`] if the decoded bytes are not exactly 32.
 pub fn decode_hex(s: &str) -> Result<Bytes32> {
     let s = s.strip_prefix("0x").unwrap_or(s);
-    let bytes = hex::decode(s).map_err(|e| Error::HexDecode(e.to_string()))?;
+    let bytes = hex::decode(s)?;
     let len = bytes.len();
     bytes.try_into().map_err(|_| Error::InvalidNodeLength(len))
 }
@@ -22,20 +22,6 @@ pub fn decode_hex(s: &str) -> Result<Bytes32> {
 #[must_use]
 pub fn encode_hex(bytes: &Bytes32) -> String {
     format!("0x{}", hex::encode(bytes))
-}
-
-/// Concatenate two hashes in sorted (ascending) order into a 64-byte buffer.
-#[must_use]
-pub fn concat_sorted(a: &Bytes32, b: &Bytes32) -> [u8; 64] {
-    let mut buf = [0u8; 64];
-    if a <= b {
-        buf[..32].copy_from_slice(a);
-        buf[32..].copy_from_slice(b);
-    } else {
-        buf[..32].copy_from_slice(b);
-        buf[32..].copy_from_slice(a);
-    }
-    buf
 }
 
 #[cfg(test)]
@@ -69,17 +55,5 @@ mod tests {
     fn invalid_hex_length() {
         let result = decode_hex("0x00");
         assert!(matches!(result, Err(Error::InvalidNodeLength(1))));
-    }
-
-    #[test]
-    fn concat_sorted_order() {
-        let a = [0u8; 32];
-        let mut b = [0u8; 32];
-        b[31] = 1;
-        let fwd = concat_sorted(&a, &b);
-        let rev = concat_sorted(&b, &a);
-        assert_eq!(fwd, rev, "concat_sorted must be commutative");
-        assert_eq!(&fwd[..32], &a);
-        assert_eq!(&fwd[32..], &b);
     }
 }

@@ -6,7 +6,7 @@ use crate::abi::compute_leaf_hash;
 use crate::bytes::{Bytes32, decode_hex, encode_hex};
 use crate::error::{Error, Result};
 use crate::hashes::standard_node_hash;
-use crate::merkle::{LeafHasher, MerkleTree, TreeParts};
+use crate::merkle::{LeafHasher, MerkleTree, TreeParts, build_sorted_tree};
 use crate::tree;
 
 const FORMAT: &str = "standard-v1";
@@ -101,28 +101,12 @@ impl StandardMerkleTree {
             return Err(Error::EmptyLeaves);
         }
 
-        let mut indexed: Vec<(usize, Bytes32)> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let hash = compute_leaf_hash(&leaf_encoding, v)?;
-                Ok((i, hash))
-            })
-            .collect::<Result<_>>()?;
-
-        if options.sort_leaves {
-            indexed.sort_unstable_by_key(|a| a.1);
-        }
-
-        let leaves: Vec<Bytes32> = indexed.iter().map(|(_, h)| *h).collect();
-        let tree = tree::build(&leaves, standard_node_hash)?;
-
-        let mut tree_indices = vec![0usize; values.len()];
-        for (leaf_pos, &(value_idx, _)) in indexed.iter().enumerate() {
-            if let Some(slot) = tree_indices.get_mut(value_idx) {
-                *slot = tree.len() - 1 - leaf_pos;
-            }
-        }
+        let (tree, tree_indices) = build_sorted_tree(
+            &values,
+            |v| compute_leaf_hash(&leaf_encoding, v),
+            options.sort_leaves,
+            standard_node_hash,
+        )?;
 
         Ok(Self::from_parts(TreeParts {
             hasher: StandardHasher {
@@ -190,6 +174,16 @@ impl StandardMerkleTree {
     ) -> Result<bool> {
         let hash = compute_leaf_hash(leaf_encoding, leaf)?;
         Ok(tree::process_proof(&hash, proof, standard_node_hash) == *root)
+    }
+
+    /// Verify a multi-proof against a known root without a tree instance.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any multi-proof processing error.
+    pub fn verify_multi_proof(root: &Bytes32, mp: &crate::MultiProof) -> Result<bool> {
+        let computed = tree::process_multi_proof(mp, standard_node_hash)?;
+        Ok(computed == *root)
     }
 
     /// Serialise to a JSON-friendly snapshot.

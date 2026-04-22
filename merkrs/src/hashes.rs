@@ -1,8 +1,21 @@
 //! Keccak-256 hashing primitives.
 
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 
-use crate::bytes::{Bytes32, concat_sorted};
+use crate::bytes::Bytes32;
+
+/// Marker for which node-hash strategy a serialised tree was built with.
+///
+/// `None` implies the default [`standard_node_hash`]. `Some(NodeHashKind::Custom)`
+/// records that a caller-supplied hash was used, so the same hash must be
+/// passed when reconstructing the tree from JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeHashKind {
+    /// A user-provided node hash other than [`standard_node_hash`].
+    Custom,
+}
 
 /// Compute the Keccak-256 hash of arbitrary data.
 #[must_use]
@@ -23,6 +36,14 @@ pub type NodeHashFn = fn(&Bytes32, &Bytes32) -> Bytes32;
 #[must_use]
 pub fn standard_node_hash(a: &Bytes32, b: &Bytes32) -> Bytes32 {
     keccak256(&concat_sorted(a, b))
+}
+
+fn concat_sorted(a: &Bytes32, b: &Bytes32) -> [u8; 64] {
+    let mut buf = [0u8; 64];
+    let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+    buf[..32].copy_from_slice(lo);
+    buf[32..].copy_from_slice(hi);
+    buf
 }
 
 #[cfg(test)]
@@ -59,5 +80,15 @@ mod tests {
     fn leaf_hash_is_double_keccak() {
         let input = [0u8; 32];
         assert_eq!(standard_leaf_hash(&input), keccak256(&keccak256(&input)));
+    }
+
+    #[test]
+    fn concat_sorted_is_commutative() {
+        let a = [0u8; 32];
+        let mut b = [0u8; 32];
+        b[31] = 1;
+        assert_eq!(concat_sorted(&a, &b), concat_sorted(&b, &a));
+        assert_eq!(&concat_sorted(&a, &b)[..32], &a);
+        assert_eq!(&concat_sorted(&a, &b)[32..], &b);
     }
 }
