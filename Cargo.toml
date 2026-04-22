@@ -4,7 +4,7 @@ default-members = ["merkrs"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/qntx/merkrs"
@@ -31,10 +31,6 @@ opt-level = 0
 
 [profile.test]
 opt-level = 2
-
-[profile.ci]
-debug = false
-inherits = "dev"
 
 [profile.bench]
 debug = true

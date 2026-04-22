@@ -121,3 +121,80 @@ fn parse_i256(value: &Value) -> Result<I256> {
         _ => Err(Error::AbiEncode("expected number or string for int".into())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn length_mismatch_rejected() {
+        let err = compute_leaf_hash(&["uint256".into()], &[]).unwrap_err();
+        assert!(matches!(err, Error::AbiEncode(_)));
+    }
+
+    #[test]
+    fn unsupported_type_rejected() {
+        let err = compute_leaf_hash(&["not_a_type".into()], &[json!(0)]).unwrap_err();
+        assert!(matches!(err, Error::AbiEncode(_)));
+    }
+
+    #[test]
+    fn encodes_address_uint256_pair() {
+        let a = compute_leaf_hash(
+            &["address".into(), "uint256".into()],
+            &[
+                json!("0x1111111111111111111111111111111111111111"),
+                json!(100),
+            ],
+        )
+        .unwrap();
+        let b = compute_leaf_hash(
+            &["address".into(), "uint256".into()],
+            &[
+                json!("0x1111111111111111111111111111111111111111"),
+                json!("100"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(a, b, "numeric and stringified uint must hash identically");
+    }
+
+    #[test]
+    fn encodes_dynamic_bytes_and_string() {
+        let a = compute_leaf_hash(
+            &["bytes".into(), "string".into()],
+            &[json!("0xdeadbeef"), json!("hello")],
+        )
+        .unwrap();
+        let b = compute_leaf_hash(
+            &["bytes".into(), "string".into()],
+            &[json!("0xDEADBEEF"), json!("hello")],
+        )
+        .unwrap();
+        assert_eq!(a, b, "hex case must not affect the encoded bytes");
+    }
+
+    #[test]
+    fn encodes_negative_int256() {
+        let hash = compute_leaf_hash(&["int256".into()], &[json!("-1")]).unwrap();
+        assert_ne!(hash, [0u8; 32]);
+    }
+
+    #[test]
+    fn encodes_bool_and_fixed_bytes32() {
+        let from_bool = compute_leaf_hash(&["bool".into()], &[json!(true)]).unwrap();
+        let from_bool_str = compute_leaf_hash(&["bool".into()], &[json!("true")]).unwrap();
+        assert_eq!(from_bool, from_bool_str);
+
+        let fixed = compute_leaf_hash(
+            &["bytes32".into()],
+            &[json!(
+                "0x1111111111111111111111111111111111111111111111111111111111111111"
+            )],
+        )
+        .unwrap();
+        assert_ne!(fixed, [0u8; 32]);
+    }
+}

@@ -37,22 +37,25 @@ cargo add merkrs
 use merkrs::{StandardMerkleTree, standard, bytes::encode_hex};
 use serde_json::json;
 
-let values = vec![
-    vec![json!("0x1111111111111111111111111111111111111111"), json!("5000000000000000000")],
-    vec![json!("0x2222222222222222222222222222222222222222"), json!("2500000000000000000")],
-];
+fn main() -> merkrs::Result<()> {
+    let values = vec![
+        vec![json!("0x1111111111111111111111111111111111111111"), json!("5000000000000000000")],
+        vec![json!("0x2222222222222222222222222222222222222222"), json!("2500000000000000000")],
+    ];
 
-let tree = StandardMerkleTree::new(
-    values.clone(),
-    vec!["address".to_string(), "uint256".to_string()],
-    standard::Options::default(),
-).unwrap();
+    let tree = StandardMerkleTree::new(
+        values,
+        vec!["address".into(), "uint256".into()],
+        standard::Options::default(),
+    )?;
 
-println!("Root: {}", encode_hex(tree.root()));
+    println!("Root: {}", encode_hex(tree.root()));
 
-let data = tree.to_data();
-let json = serde_json::to_string_pretty(&data).unwrap();
-std::fs::write("tree.json", json).unwrap();
+    let data = tree.to_data();
+    let json = serde_json::to_string_pretty(&data).expect("serialising tree data cannot fail");
+    std::fs::write("tree.json", json).expect("disk write");
+    Ok(())
+}
 ```
 
 ### Obtaining a Proof
@@ -61,16 +64,19 @@ std::fs::write("tree.json", json).unwrap();
 use merkrs::{StandardMerkleTree, StandardMerkleTreeData};
 use serde_json::json;
 
-let json_data = std::fs::read_to_string("tree.json").unwrap();
-let data: StandardMerkleTreeData = serde_json::from_str(&json_data).unwrap();
-let tree = StandardMerkleTree::from_data(data).unwrap();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let json_data = std::fs::read_to_string("tree.json")?;
+    let data: StandardMerkleTreeData = serde_json::from_str(&json_data)?;
+    let tree = StandardMerkleTree::from_data(data)?;
 
-let proof = tree.proof(&vec![
-    json!("0x1111111111111111111111111111111111111111"),
-    json!("5000000000000000000")
-]).unwrap();
+    let proof = tree.proof(&vec![
+        json!("0x1111111111111111111111111111111111111111"),
+        json!("5000000000000000000"),
+    ])?;
 
-println!("Proof: {:?}", proof);
+    println!("Proof: {proof:?}");
+    Ok(())
+}
 ```
 
 ### Validating a Proof in Solidity
@@ -130,12 +136,12 @@ This is useful to override the leaf hashing algorithm and use a different one pr
 ```rust
 use merkrs::{SimpleMerkleTree, simple, Bytes32, keccak256};
 
-let values: Vec<Bytes32> = vec![
-    keccak256(b"Value 1"),
-    keccak256(b"Value 2"),
-];
-
-let tree = SimpleMerkleTree::new(&values, simple::Options::default()).unwrap();
+fn main() -> merkrs::Result<()> {
+    let values: Vec<Bytes32> = vec![keccak256(b"Value 1"), keccak256(b"Value 2")];
+    let tree = SimpleMerkleTree::new(&values, simple::Options::default())?;
+    let _ = tree.root();
+    Ok(())
+}
 ```
 
 ## Advanced Usage
