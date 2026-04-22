@@ -12,8 +12,8 @@
 [crates-url]: https://crates.io/crates/merkrs
 [docs-badge]: https://img.shields.io/docsrs/merkrs.svg
 [docs-url]: https://docs.rs/merkrs
-[ci-badge]: https://github.com/qntx/merkrs/actions/workflows/rust.yml/badge.svg
-[ci-url]: https://github.com/qntx/merkrs/actions/workflows/rust.yml
+[ci-badge]: https://github.com/qntx/merkrs/actions/workflows/ci.yml/badge.svg
+[ci-url]: https://github.com/qntx/merkrs/actions/workflows/ci.yml
 [license-badge]: https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg
 [license-url]: LICENSE-MIT
 [rust-badge]: https://img.shields.io/badge/rust-edition%202024-orange.svg
